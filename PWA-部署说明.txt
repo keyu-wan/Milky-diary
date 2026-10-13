@@ -1,6 +1,0 @@
-Milky Diary PWA + 照片去重
-1. 将本文件包中 index.html、cloud.js、firebase-config.js、sw.js、manifest.webmanifest 和 icons 文件夹上传至 GitHub 仓库根目录。
-2. Firebase Console → Firestore Database → Rules 粘贴 firestore.rules 并 Publish（必要）。
-3. Storage 规则、主人 UID 不需要修改。
-4. 在 iPhone Safari 打开网站，分享 → 添加到主屏幕。
-5. 原有照片不删除；旧记录没有哈希，只能通过标题提示重复。
