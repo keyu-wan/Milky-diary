@@ -16,7 +16,6 @@ let app,auth,db,storage;
 try{app=firebase.initializeApp(config);auth=firebase.auth();db=firebase.firestore();storage=firebase.storage()}catch(e){status('Firebase 初始化失败：'+e.message);return}
 const contentRef=db.collection('site').doc('content');
 let isOwner=false, signedIn=false, cloudReady=false, saving=false, cloudPhotoDocs=[];
-let ownerLoginInProgress=false;
 const photoRefs=new Map();
 const setOwner=flag=>{
  isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);
@@ -31,7 +30,7 @@ renderMilkyEvents=function(){originalRenderEvents();document.querySelectorAll('[
 renderMilkyWeights=function(){originalRenderWeights();document.querySelectorAll('[data-wt]').forEach(el=>el.hidden=!isOwner)};
 const originalRenderPhotos=renderPhotos;
 renderPhotos=function(){
- const remote=cloudPhotoDocs.map(p=>({id:p.id,date:p.date,title:p.title,src:photoRefs.get(p.id)||'',cloud:true}));
+ const remote=cloudPhotoDocs.map(p=>({id:p.id,date:p.date,title:p.title,uploaderName:p.uploaderName||'',src:photoRefs.get(p.id)||'',cloud:true}));
  uploaded=remote;
  originalRenderPhotos();
  // only owner may remove photos; visitor-created images are displayed but not editable
@@ -74,14 +73,18 @@ async function compressJpeg(file){
  const data=await originalResize(file);
  const r=await fetch(data);return r.blob();
 }
+const nameInput=$('photoUploaderName');
+const NAME_KEY='milky_visitor_nickname_v1';
+nameInput.value=localStorage.getItem(NAME_KEY)||'';
+nameInput.addEventListener('change',()=>localStorage.setItem(NAME_KEY,nameInput.value.trim()));
 const photoMsg=$('photoMsg');
 const MAX_FILES=5, MAX_INPUT=10*1024*1024, MAX_OUTPUT=10*1024*1024;
 uploadButton.onclick=async()=>{
  if(!signedIn){photoMsg.textContent='正在建立安全上传会话，请稍后再试。';return}
- const files=[...$('uploadPhoto').files],date=$('photoDate').value,title=$('photoTitle').value.trim();
+ const files=[...$('uploadPhoto').files],date=$('photoDate').value,title=$('photoTitle').value.trim(),uploaderName=nameInput.value.trim();
  if(!files.length||!date){photoMsg.textContent='请先选择照片和拍摄日期。';return}
  if(files.length>MAX_FILES){photoMsg.textContent='每次最多上传 5 张照片。';return}
- if(title.length>80){photoMsg.textContent='标题最多 80 个字。';return}
+ if(!uploaderName||uploaderName.length>30){photoMsg.textContent='请填写 1–30 个字的昵称。';return}if(title.length>80){photoMsg.textContent='标题最多 80 个字。';return}
  uploadButton.disabled=true;
  try{
   for(let i=0;i<files.length;i++){
@@ -94,33 +97,18 @@ uploadButton.onclick=async()=>{
    const path=`photos/${auth.currentUser.uid}/${id}.jpg`;
    await storage.ref(path).put(blob,{contentType:'image/jpeg',customMetadata:{source:'milky-diary'}});
    try{
-    await db.collection('photos').doc(id).set({id,uid:auth.currentUser.uid,date,title:title||(files.length>1?`Milky 的照片 ${i+1}`:'Milky 的新照片'),path,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    await db.collection('photos').doc(id).set({id,uid:auth.currentUser.uid,date,uploaderName,title:title||(files.length>1?`Milky 的照片 ${i+1}`:'Milky 的新照片'),path,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
    }catch(e){await storage.ref(path).delete().catch(()=>{});throw e}
   }
-  $('uploadPhoto').value='';photoMsg.textContent='上传成功！照片已经公开，所有访客都可以看到。';
+  localStorage.setItem(NAME_KEY,uploaderName);$('uploadPhoto').value='';photoMsg.textContent='上传成功！照片已经公开，所有访客都可以看到。';
  }catch(e){photoMsg.textContent='上传失败：'+e.message}finally{uploadButton.disabled=false}
 };
 $('cloudLogin').onclick=async()=>{
- if(ownerLoginInProgress)return;
- ownerLoginInProgress=true;
- $('cloudLogin').disabled=true;
  try{
-  status('正在使用 Google 登录…');
-  // Prevent the auth observer from recreating an anonymous session
-  // between signOut and signInWithPopup.
+  // Anonymous visitor sessions must be upgraded by signing out before Google login.
   if(auth.currentUser?.isAnonymous)await auth.signOut();
-  const result=await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
-  if(result.user.uid!==ownerUid){
-   status('Google 登录成功，但不是主人账号。当前 UID: '+result.user.uid);
-  }
- }catch(e){
-  showError(e);
-  // Do not silently overwrite the login error with an anonymous login.
-  if(!auth.currentUser)await auth.signInAnonymously().catch(()=>{});
- }finally{
-  ownerLoginInProgress=false;
-  $('cloudLogin').disabled=false;
- }
+  await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+ }catch(e){showError(e);if(!auth.currentUser)await auth.signInAnonymously().catch(showError)}
 };
 $('cloudLogout').onclick=async()=>{try{await auth.signOut();await auth.signInAnonymously()}catch(e){showError(e)}};
 $('cloudSeed').onclick=async()=>{
@@ -148,7 +136,7 @@ db.collection('photos').orderBy('createdAt','desc').onSnapshot(async snap=>{
 },showError);
 auth.onAuthStateChanged(async user=>{
  signedIn=!!user;
- if(!user){setOwner(false);if(!ownerLoginInProgress)try{await auth.signInAnonymously()}catch(e){showError(e)}return}
+ if(!user){setOwner(false);try{await auth.signInAnonymously()}catch(e){showError(e)}return}
  setOwner(!user.isAnonymous&&ownerUid!=='REPLACE_WITH_OWNER_UID'&&user.uid===ownerUid);
  if(isOwner){status('主人已登录 · UID: '+user.uid);$('cloudSeed').hidden=cloudReady}
  else if(!user.isAnonymous){status('此账号不是指定的主人账号。UID: '+user.uid+'（请在配置文件和安全规则中设置主人 UID）')}
