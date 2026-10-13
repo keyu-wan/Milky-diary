@@ -21,11 +21,11 @@ const setOwner=flag=>{
  isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);
  $('cloudLogin').hidden=flag;$('cloudLogout').hidden=!flag;
  $('cloudSeed').hidden=!flag || cloudReady;
- document.querySelectorAll('.taskRow input[type=checkbox]').forEach(el=>el.disabled=!flag);
+ document.querySelectorAll('.taskRow input[type=checkbox]').forEach(el=>el.disabled=!flag);document.querySelectorAll('.taskStar').forEach(el=>el.disabled=!flag);
 };
 const showError=e=>{status('操作失败：'+(e&&e.message||String(e)))};
 const originalRenderAll=renderAllTasks, originalRenderEvents=renderMilkyEvents, originalRenderWeights=renderMilkyWeights;
-renderAllTasks=function(){originalRenderAll();document.querySelectorAll('.taskRow input[type=checkbox]').forEach(el=>el.disabled=!isOwner)};
+renderAllTasks=function(){originalRenderAll();document.querySelectorAll('.taskRow input[type=checkbox]').forEach(el=>el.disabled=!isOwner);document.querySelectorAll('.taskStar').forEach(el=>el.disabled=!isOwner)};
 renderMilkyEvents=function(){originalRenderEvents();document.querySelectorAll('[data-ev]').forEach(el=>el.hidden=!isOwner)};
 renderMilkyWeights=function(){originalRenderWeights();document.querySelectorAll('[data-wt]').forEach(el=>el.hidden=!isOwner)};
 const originalRenderPhotos=renderPhotos;
@@ -74,7 +74,7 @@ async function compressJpeg(file){
  const r=await fetch(data);return r.blob();
 }
 const photoMsg=$('photoMsg');
-const MAX_FILES=5, MAX_INPUT=10*1024*1024, MAX_OUTPUT=3*1024*1024;
+const MAX_FILES=5, MAX_INPUT=10*1024*1024, MAX_OUTPUT=10*1024*1024;
 uploadButton.onclick=async()=>{
  if(!signedIn){photoMsg.textContent='正在建立安全上传会话，请稍后再试。';return}
  const files=[...$('uploadPhoto').files],date=$('photoDate').value,title=$('photoTitle').value.trim();
@@ -88,7 +88,7 @@ uploadButton.onclick=async()=>{
    if(!file.type.startsWith('image/')||file.size>MAX_INPUT)throw Error('请选择不超过 10MB 的图片文件。');
    photoMsg.textContent=`正在上传 ${i+1}/${files.length} 张…`;
    const blob=await compressJpeg(file);
-   if(blob.size>=MAX_OUTPUT)throw Error('压缩后照片仍超过 3MB，请换一张或缩小图片。');
+   if(blob.size>=MAX_OUTPUT)throw Error('处理后照片仍超过 10MB，请换一张或缩小图片。');
    const id=db.collection('photos').doc().id;
    const path=`photos/${auth.currentUser.uid}/${id}.jpg`;
    await storage.ref(path).put(blob,{contentType:'image/jpeg',customMetadata:{source:'milky-diary'}});
