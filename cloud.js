@@ -4,7 +4,7 @@
 const $=id=>document.getElementById(id);
 const status=msg=>{$('cloudStatus').textContent=msg};
 const config=window.MILKY_FIREBASE_CONFIG;
-const ownerUid=window.MILKY_OWNER_UID;
+const ownerUids=window.MILKY_OWNER_UIDS || [window.MILKY_OWNER_UID];
 document.body.classList.add('cloud-viewer');
 if(!config || !config.apiKey || config.apiKey.startsWith('PASTE_') || !config.projectId || config.projectId.startsWith('PASTE_')){
  status('尚未连接云端：请按 README 配置 Firebase。当前页面是静态预览，上传功能未启用。');
@@ -133,7 +133,11 @@ $('uploadPhoto').addEventListener('change',async()=>{
  else photoMsg.textContent='已选择 '+files.length+' 张照片。上传时会检查内容哈希和重复标题。';
 });
 uploadButton.onclick=async()=>{
- if(!signedIn){photoMsg.textContent='正在建立安全上传会话，请稍后再试。';return}
+ if(!auth.currentUser){
+  photoMsg.textContent='正在建立访客上传会话…';
+  try{await ensureAnonymous()}catch(e){photoMsg.textContent='访客登录失败：'+e.message;return}
+  if(!auth.currentUser){photoMsg.textContent='访客上传会话尚未建立，请稍后重试。';return}
+ }
  const files=[...$('uploadPhoto').files],date=$('photoDate').value,title=$('photoTitle').value.trim(),uploaderName=nameInput.value.trim();
  if(!files.length||!date){photoMsg.textContent='请先选择照片和拍摄日期。';return}
  if(files.length>MAX_FILES){photoMsg.textContent='每次最多上传 5 张照片。';return}
@@ -179,28 +183,40 @@ uploadButton.onclick=async()=>{
   photoMsg.textContent=`完成：成功上传 ${uploadedCount} 张，跳过重复/取消 ${skipped} 张${failed?'，失败 '+failed+' 张':''}。上传的照片已公开。`;
  }catch(e){photoMsg.textContent='检查失败：'+e.message}finally{uploadButton.disabled=false}
 };
-// One login attempt at a time. Suppress automatic anonymous sign-in while switching accounts.
-$('cloudLogin').onclick=async()=>{
- if(loginPending)return;
+// Do not automatically start anonymous auth at page load or on sign-out.
+// It races with Google popup auth on iOS and can cancel the popup request.
+// Anonymous authentication is created only when a visitor explicitly uploads.
+$('cloudLogin').onclick=()=>{
+ if(loginPending||authTransition)return;
  loginPending=true;authTransition=true;$('cloudLogin').disabled=true;
- try{
-  status('正在打开 Google 登录…');
-  if(auth.currentUser?.isAnonymous)await auth.signOut();
-  await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
- }catch(e){showError(e)}finally{
-  authTransition=false;loginPending=false;$('cloudLogin').disabled=false;
-  if(!auth.currentUser)ensureAnonymous();
- }
+ status('正在打开 Google 登录…');
+ // IMPORTANT: invoke signInWithPopup synchronously from the click gesture.
+ // Never await signOut() first: Firebase replaces the anonymous session itself.
+ const provider=new firebase.auth.GoogleAuthProvider();
+ let attempt;
+ try{attempt=auth.signInWithPopup(provider)}
+ catch(e){showError(e);loginPending=false;authTransition=false;$('cloudLogin').disabled=false;return}
+ // iOS installed web apps may stall rather than return a popup error.
+ const help=setTimeout(()=>{if(loginPending)status('Google 登录尚未完成。若未出现 Google 账号页面，请关闭此窗口，在 Safari 中打开网站重试；不要连续点击登录。')},15000);
+ attempt.then(()=>status('Google 登录成功，正在验证主人权限…')).catch(e=>{
+  const code=e?.code||'';
+  if(code==='auth/cancelled-popup-request')status('Google 登录请求被取消。请关闭其他登录窗口，刷新页面后只点击一次登录。');
+  else if(code==='auth/popup-blocked'||code==='auth/popup-closed-by-user')status('Google 登录窗口未完成。请允许弹出窗口，并在 Safari 中尝试登录。');
+  else showError(e);
+ }).finally(()=>{clearTimeout(help);authTransition=false;loginPending=false;$('cloudLogin').disabled=false});
 };
 $('cloudLogout').onclick=async()=>{
- if(loginPending)return;
+ if(loginPending||authTransition)return;
  authTransition=true;
- try{await auth.signOut()}catch(e){showError(e)}finally{authTransition=false;ensureAnonymous()}
+ try{await auth.signOut();status('已退出主人模式。')}catch(e){showError(e)}finally{authTransition=false}
 };
 async function ensureAnonymous(){
- if(authTransition||anonymousPending||auth.currentUser)return;
- anonymousPending=true;
- try{await auth.signInAnonymously()}catch(e){showError(e)}finally{anonymousPending=false}
+ if(authTransition||loginPending)throw Error('正在登录主人账号，请稍后重试');
+ if(auth.currentUser)return auth.currentUser;
+ if(anonymousPending)return anonymousPending;
+ anonymousPending=auth.signInAnonymously();
+ try{return (await anonymousPending).user}
+ finally{anonymousPending=false}
 }
 $('cloudSeed').onclick=async()=>{
  if(!isOwner||cloudReady)return;
@@ -227,8 +243,8 @@ db.collection('photos').orderBy('createdAt','desc').onSnapshot(async snap=>{
 },showError);
 auth.onAuthStateChanged(async user=>{
  signedIn=!!user;
- if(!user){setOwner(false);if(!authTransition)ensureAnonymous();return}
- setOwner(!user.isAnonymous&&ownerUid!=='REPLACE_WITH_OWNER_UID'&&user.uid===ownerUid);
+ if(!user){setOwner(false);signedIn=false;status('访客模式 · 可以浏览照片，上传时自动建立访客会话');return}
+ setOwner(!user.isAnonymous&&ownerUids.includes(user.uid));
  if(isOwner){status('主人已登录 · UID: '+user.uid);$('cloudSeed').hidden=cloudReady}
  else if(!user.isAnonymous){status('此账号不是指定的主人账号。UID: '+user.uid+'（请在配置文件和安全规则中设置主人 UID）')}
  else status('访客模式 · 可以直接上传照片');

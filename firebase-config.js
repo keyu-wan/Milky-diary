@@ -8,4 +8,5 @@ window.MILKY_FIREBASE_CONFIG = {
   appId: "1:12624458373:web:476d3419f76a0a7080afec"
 };
 // After signing in, replace this placeholder with YOUR Firebase Authentication UID.
-window.MILKY_OWNER_UID = "w8g6tCU9KsbP7zKbodNWycLjdoi2";
+window.MILKY_OWNER_UIDS = ["w8g6tCU9KsbP7zKbodNWycLjdoi2", "ZiU74F6Z6uUA7bAbPJQR9zoZ1ck1"];
+window.MILKY_OWNER_UID = "w8g6tCU9KsbP7zKbodNWycLjdoi2"; // Backward compatibility

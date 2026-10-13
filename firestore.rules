@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
  match /databases/{database}/documents {
-  function owner() { return request.auth != null && request.auth.uid == 'w8g6tCU9KsbP7zKbodNWycLjdoi2'; }
+  function owner() { return request.auth != null && request.auth.uid in ['w8g6tCU9KsbP7zKbodNWycLjdoi2', 'ZiU74F6Z6uUA7bAbPJQR9zoZ1ck1']; }
   match /site/content {
    allow read: if true;
    allow write: if owner();
