@@ -16,6 +16,7 @@ let app,auth,db,storage;
 try{app=firebase.initializeApp(config);auth=firebase.auth();db=firebase.firestore();storage=firebase.storage()}catch(e){status('Firebase 初始化失败：'+e.message);return}
 const contentRef=db.collection('site').doc('content');
 let isOwner=false, signedIn=false, cloudReady=false, saving=false, cloudPhotoDocs=[];
+let ownerLoginInProgress=false;
 const photoRefs=new Map();
 const setOwner=flag=>{
  isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);
@@ -100,11 +101,26 @@ uploadButton.onclick=async()=>{
  }catch(e){photoMsg.textContent='上传失败：'+e.message}finally{uploadButton.disabled=false}
 };
 $('cloudLogin').onclick=async()=>{
+ if(ownerLoginInProgress)return;
+ ownerLoginInProgress=true;
+ $('cloudLogin').disabled=true;
  try{
-  // Anonymous visitor sessions must be upgraded by signing out before Google login.
+  status('正在使用 Google 登录…');
+  // Prevent the auth observer from recreating an anonymous session
+  // between signOut and signInWithPopup.
   if(auth.currentUser?.isAnonymous)await auth.signOut();
-  await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
- }catch(e){showError(e);if(!auth.currentUser)await auth.signInAnonymously().catch(showError)}
+  const result=await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+  if(result.user.uid!==ownerUid){
+   status('Google 登录成功，但不是主人账号。当前 UID: '+result.user.uid);
+  }
+ }catch(e){
+  showError(e);
+  // Do not silently overwrite the login error with an anonymous login.
+  if(!auth.currentUser)await auth.signInAnonymously().catch(()=>{});
+ }finally{
+  ownerLoginInProgress=false;
+  $('cloudLogin').disabled=false;
+ }
 };
 $('cloudLogout').onclick=async()=>{try{await auth.signOut();await auth.signInAnonymously()}catch(e){showError(e)}};
 $('cloudSeed').onclick=async()=>{
@@ -132,7 +148,7 @@ db.collection('photos').orderBy('createdAt','desc').onSnapshot(async snap=>{
 },showError);
 auth.onAuthStateChanged(async user=>{
  signedIn=!!user;
- if(!user){setOwner(false);try{await auth.signInAnonymously()}catch(e){showError(e)}return}
+ if(!user){setOwner(false);if(!ownerLoginInProgress)try{await auth.signInAnonymously()}catch(e){showError(e)}return}
  setOwner(!user.isAnonymous&&ownerUid!=='REPLACE_WITH_OWNER_UID'&&user.uid===ownerUid);
  if(isOwner){status('主人已登录 · UID: '+user.uid);$('cloudSeed').hidden=cloudReady}
  else if(!user.isAnonymous){status('此账号不是指定的主人账号。UID: '+user.uid+'（请在配置文件和安全规则中设置主人 UID）')}
