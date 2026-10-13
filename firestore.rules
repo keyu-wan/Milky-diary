@@ -19,7 +19,14 @@ service cloud.firestore {
      && request.resource.data.title is string && request.resource.data.title.size() <= 80
      && request.resource.data.date is string && request.resource.data.date.matches('^20[0-9]{2}-[0-9]{2}-[0-9]{2}$')
      && request.resource.data.createdAt == request.time;
-   allow update, delete: if owner();
+   allow update: if owner()
+     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title','date','uploaderName','description','updatedAt'])
+     && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 80
+     && request.resource.data.date is string && request.resource.data.date.matches('^20[0-9]{2}-[0-9]{2}-[0-9]{2}$')
+     && request.resource.data.uploaderName is string && request.resource.data.uploaderName.size() >= 1 && request.resource.data.uploaderName.size() <= 30
+     && request.resource.data.description is string && request.resource.data.description.size() <= 500
+     && request.resource.data.updatedAt == request.time;
+   allow delete: if owner();
   }
   match /{document=**} { allow read, write: if false; }
  }

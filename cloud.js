@@ -16,6 +16,7 @@ let app,auth,db,storage;
 try{app=firebase.initializeApp(config);auth=firebase.auth();db=firebase.firestore();storage=firebase.storage()}catch(e){status('Firebase 初始化失败：'+e.message);return}
 const contentRef=db.collection('site').doc('content');
 let isOwner=false, signedIn=false, cloudReady=false, saving=false, cloudPhotoDocs=[];
+let loginPending=false, authTransition=false, anonymousPending=false;
 const photoRefs=new Map();
 const setOwner=flag=>{
  isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);
@@ -30,11 +31,12 @@ renderMilkyEvents=function(){originalRenderEvents();document.querySelectorAll('[
 renderMilkyWeights=function(){originalRenderWeights();document.querySelectorAll('[data-wt]').forEach(el=>el.hidden=!isOwner)};
 const originalRenderPhotos=renderPhotos;
 renderPhotos=function(){
- const remote=cloudPhotoDocs.map(p=>({id:p.id,date:p.date,title:p.title,uploaderName:p.uploaderName||'',src:photoRefs.get(p.id)||'',cloud:true}));
+ const remote=cloudPhotoDocs.map(p=>({id:p.id,date:p.date,title:p.title,uploaderName:p.uploaderName||'',description:p.description||'',src:photoRefs.get(p.id)||'',cloud:true}));
  uploaded=remote;
  originalRenderPhotos();
  // only owner may remove photos; visitor-created images are displayed but not editable
- if(isOwner){document.querySelectorAll('#photos .photo').forEach(card=>{const id=card.dataset.id;if(cloudPhotoDocs.some(p=>p.id===id)){const b=document.createElement('button');b.type='button';b.dataset.remove=id;b.setAttribute('aria-label','删除照片');b.textContent='✕';card.appendChild(b)}})}
+ if(isOwner){document.querySelectorAll('#photos .photo').forEach(card=>{const id=card.dataset.id;if(cloudPhotoDocs.some(p=>p.id===id)){const b=document.createElement('button');b.type='button';b.dataset.remove=id;b.setAttribute('aria-label','删除照片');b.textContent='✕';card.appendChild(b);const edit=document.createElement('button');edit.type='button';edit.className='photo-edit-btn';edit.dataset.edit=id;edit.textContent='✎';edit.title='编辑照片信息';edit.setAttribute('aria-label','编辑照片信息');card.appendChild(edit)}})}
+ document.querySelectorAll('#photos [data-edit]').forEach(b=>{b.onclick=e=>{e.stopPropagation();if(!isOwner)return;openPhotoEditor(b.dataset.edit)}});
  document.querySelectorAll('#photos [data-remove]').forEach(b=>{
   b.hidden=!isOwner;
   if(isOwner)b.onclick=async()=>{
@@ -44,6 +46,27 @@ renderPhotos=function(){
   };
  });
 };
+// Edit metadata only. Original photo bytes, storage path and content hashes are immutable.
+const editor=document.createElement('dialog');editor.id='milkyPhotoEditor';editor.setAttribute('aria-label','编辑照片信息');
+editor.innerHTML=`<form id="milkyPhotoEditForm" method="dialog"><h3>✎ 编辑照片信息</h3><label>照片标题<input id="milkyEditTitle" maxlength="80" required></label><label>拍摄日期<input id="milkyEditDate" type="date" required></label><label>上传者昵称<input id="milkyEditUploader" maxlength="30" required></label><label>照片描述<textarea id="milkyEditDescription" maxlength="500" rows="3" placeholder="记录这张照片背后的故事（可选）"></textarea></label><p id="milkyEditError" role="alert"></p><div class="milky-editor-actions"><button type="button" id="milkyEditCancel">取消</button><button type="submit" id="milkyEditSave">保存修改</button></div></form>`;
+document.body.appendChild(editor);
+let editingId=null;
+function openPhotoEditor(id){
+ if(!isOwner)return;
+ const p=cloudPhotoDocs.find(x=>x.id===id);if(!p)return;
+ editingId=id;$('milkyEditTitle').value=p.title||'';$('milkyEditDate').value=p.date||'';
+ $('milkyEditUploader').value=p.uploaderName||'Milky 的手账';$('milkyEditDescription').value=p.description||'';
+ $('milkyEditError').textContent='';editor.showModal();
+}
+$('milkyEditCancel').onclick=()=>editor.close();
+$('milkyPhotoEditForm').addEventListener('submit',async e=>{
+ e.preventDefault();if(!isOwner||!editingId)return;
+ const title=$('milkyEditTitle').value.trim(),date=$('milkyEditDate').value,uploaderName=$('milkyEditUploader').value.trim(),description=$('milkyEditDescription').value.trim();
+ if(!title||title.length>80||!/^20\d\d-\d\d-\d\d$/.test(date)||!uploaderName||uploaderName.length>30||description.length>500){$('milkyEditError').textContent='请检查标题、日期、昵称及描述长度。';return}
+ const btn=$('milkyEditSave');btn.disabled=true;$('milkyEditError').textContent='正在保存…';
+ try{await db.collection('photos').doc(editingId).update({title,date,uploaderName,description,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});editor.close();status('照片信息已保存 ✓')}
+ catch(err){$('milkyEditError').textContent='保存失败：'+err.message}finally{btn.disabled=false}
+});
 // Existing handlers call these functions; overriding them makes owner edits auto-save.
 const originalStoreMilky=storeMilky, originalStoreTasks=storeTasks;
 let saveTimer;
@@ -156,14 +179,29 @@ uploadButton.onclick=async()=>{
   photoMsg.textContent=`完成：成功上传 ${uploadedCount} 张，跳过重复/取消 ${skipped} 张${failed?'，失败 '+failed+' 张':''}。上传的照片已公开。`;
  }catch(e){photoMsg.textContent='检查失败：'+e.message}finally{uploadButton.disabled=false}
 };
+// One login attempt at a time. Suppress automatic anonymous sign-in while switching accounts.
 $('cloudLogin').onclick=async()=>{
+ if(loginPending)return;
+ loginPending=true;authTransition=true;$('cloudLogin').disabled=true;
  try{
-  // Anonymous visitor sessions must be upgraded by signing out before Google login.
+  status('正在打开 Google 登录…');
   if(auth.currentUser?.isAnonymous)await auth.signOut();
   await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
- }catch(e){showError(e);if(!auth.currentUser)await auth.signInAnonymously().catch(showError)}
+ }catch(e){showError(e)}finally{
+  authTransition=false;loginPending=false;$('cloudLogin').disabled=false;
+  if(!auth.currentUser)ensureAnonymous();
+ }
 };
-$('cloudLogout').onclick=async()=>{try{await auth.signOut();await auth.signInAnonymously()}catch(e){showError(e)}};
+$('cloudLogout').onclick=async()=>{
+ if(loginPending)return;
+ authTransition=true;
+ try{await auth.signOut()}catch(e){showError(e)}finally{authTransition=false;ensureAnonymous()}
+};
+async function ensureAnonymous(){
+ if(authTransition||anonymousPending||auth.currentUser)return;
+ anonymousPending=true;
+ try{await auth.signInAnonymously()}catch(e){showError(e)}finally{anonymousPending=false}
+}
 $('cloudSeed').onclick=async()=>{
  if(!isOwner||cloudReady)return;
  if(!confirm('首次发布当前网页的健康记录、体重和护理清单到云端？此操作只需执行一次。'))return;
@@ -189,7 +227,7 @@ db.collection('photos').orderBy('createdAt','desc').onSnapshot(async snap=>{
 },showError);
 auth.onAuthStateChanged(async user=>{
  signedIn=!!user;
- if(!user){setOwner(false);try{await auth.signInAnonymously()}catch(e){showError(e)}return}
+ if(!user){setOwner(false);if(!authTransition)ensureAnonymous();return}
  setOwner(!user.isAnonymous&&ownerUid!=='REPLACE_WITH_OWNER_UID'&&user.uid===ownerUid);
  if(isOwner){status('主人已登录 · UID: '+user.uid);$('cloudSeed').hidden=cloudReady}
  else if(!user.isAnonymous){status('此账号不是指定的主人账号。UID: '+user.uid+'（请在配置文件和安全规则中设置主人 UID）')}
