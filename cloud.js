@@ -79,29 +79,82 @@ nameInput.value=localStorage.getItem(NAME_KEY)||'';
 nameInput.addEventListener('change',()=>localStorage.setItem(NAME_KEY,nameInput.value.trim()));
 const photoMsg=$('photoMsg');
 const MAX_FILES=5, MAX_INPUT=10*1024*1024, MAX_OUTPUT=10*1024*1024;
+// SHA-256 is calculated locally before upload. fileHash catches byte-identical files;
+// imageHash catches images that produce the same normalized JPEG (e.g. differing metadata).
+const normalizeTitle=value=>(value||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase();
+const hex=buffer=>Array.from(new Uint8Array(buffer),b=>b.toString(16).padStart(2,'0')).join('');
+async function hashBlob(blob){
+ if(!globalThis.crypto?.subtle)throw Error('当前浏览器不支持安全哈希校验，请通过 HTTPS 打开网页。');
+ return hex(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()));
+}
+function duplicateInfo(candidate,known){
+ const sameHash=known.find(p=>(p.fileHash&&p.fileHash===candidate.fileHash)||(p.imageHash&&p.imageHash===candidate.imageHash));
+ if(sameHash)return {kind:'exact',photo:sameHash};
+ const sameTitle=known.find(p=>normalizeTitle(p.title)===normalizeTitle(candidate.title)&&normalizeTitle(candidate.title));
+ return sameTitle?{kind:'title',photo:sameTitle}:null;
+}
+const existingPhotos=()=>[
+ ...cloudPhotoDocs.map(p=>({title:p.title||'',date:p.date||'',fileHash:p.fileHash||'',imageHash:p.imageHash||''})),
+ // Embedded starter photos have no hashes but still participate in title warnings.
+ ...initialPhotos.map(p=>({title:p.title||'',date:p.date||'',fileHash:'',imageHash:''}))
+];
+// Check on file selection as well as on upload. A warning never silently deletes a photo.
+$('uploadPhoto').addEventListener('change',async()=>{
+ const files=[...$('uploadPhoto').files];if(!files.length)return;
+ const known=existingPhotos();let dup=0;
+ for(const file of files){
+  if(file.size>MAX_INPUT)continue;
+  try{const fileHash=await hashBlob(file);if(known.some(p=>p.fileHash&&p.fileHash===fileHash))dup++}catch(e){break}
+ }
+ if(dup)photoMsg.textContent=`⚠️ 选中的照片中有 ${dup} 张与云端文件完全相同；上传时会自动跳过。`;
+ else photoMsg.textContent='已选择 '+files.length+' 张照片。上传时会检查内容哈希和重复标题。';
+});
 uploadButton.onclick=async()=>{
  if(!signedIn){photoMsg.textContent='正在建立安全上传会话，请稍后再试。';return}
  const files=[...$('uploadPhoto').files],date=$('photoDate').value,title=$('photoTitle').value.trim(),uploaderName=nameInput.value.trim();
  if(!files.length||!date){photoMsg.textContent='请先选择照片和拍摄日期。';return}
  if(files.length>MAX_FILES){photoMsg.textContent='每次最多上传 5 张照片。';return}
- if(!uploaderName||uploaderName.length>30){photoMsg.textContent='请填写 1–30 个字的昵称。';return}if(title.length>80){photoMsg.textContent='标题最多 80 个字。';return}
+ if(!uploaderName||uploaderName.length>30){photoMsg.textContent='请填写 1–30 个字的昵称。';return}
+ if(title.length>80){photoMsg.textContent='标题最多 80 个字。';return}
  uploadButton.disabled=true;
+ let uploadedCount=0,skipped=0,failed=0;
  try{
+  // Refresh remote metadata just before checking, reducing stale-list false negatives.
+  const snap=await db.collection('photos').get();
+  const known=[...snap.docs.map(d=>d.data()),...initialPhotos.map(p=>({title:p.title}))];
   for(let i=0;i<files.length;i++){
    const file=files[i];
-   if(!file.type.startsWith('image/')||file.size>MAX_INPUT)throw Error('请选择不超过 10MB 的图片文件。');
-   photoMsg.textContent=`正在上传 ${i+1}/${files.length} 张…`;
-   const blob=await compressJpeg(file);
-   if(blob.size>=MAX_OUTPUT)throw Error('处理后照片仍超过 10MB，请换一张或缩小图片。');
-   const id=db.collection('photos').doc().id;
-   const path=`photos/${auth.currentUser.uid}/${id}.jpg`;
-   await storage.ref(path).put(blob,{contentType:'image/jpeg',customMetadata:{source:'milky-diary'}});
+   if(!file.type.startsWith('image/')||file.size>MAX_INPUT){failed++;photoMsg.textContent='第 '+(i+1)+' 张不是有效图片或超过 10MB。';continue}
+   const photoTitle=title||(files.length>1?`Milky 的照片 ${i+1}`:'Milky 的新照片');
+   photoMsg.textContent=`正在检查第 ${i+1}/${files.length} 张…`;
    try{
-    await db.collection('photos').doc(id).set({id,uid:auth.currentUser.uid,date,uploaderName,title:title||(files.length>1?`Milky 的照片 ${i+1}`:'Milky 的新照片'),path,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-   }catch(e){await storage.ref(path).delete().catch(()=>{});throw e}
+    const fileHash=await hashBlob(file);
+    // Fast path for identical original bytes: no need to compress again.
+    if(known.some(p=>p.fileHash&&p.fileHash===fileHash)){skipped++;continue}
+    const blob=await compressJpeg(file);
+    if(blob.size>=MAX_OUTPUT)throw Error('处理后照片仍超过 10MB');
+    const imageHash=await hashBlob(blob);
+    const candidate={title:photoTitle,date,fileHash,imageHash};
+    const dup=duplicateInfo(candidate,known);
+    if(dup?.kind==='exact'){skipped++;continue}
+    if(dup?.kind==='title'){
+     const ok=confirm(`⚠️ 已存在同名照片「${dup.photo.title}」。\n\n这可能是不同照片，也可能是重复内容。是否仍然上传本张？`);
+     if(!ok){skipped++;continue}
+    }
+    photoMsg.textContent=`正在上传 ${i+1}/${files.length} 张…`;
+    const id=db.collection('photos').doc().id;
+    const path=`photos/${auth.currentUser.uid}/${id}.jpg`;
+    await storage.ref(path).put(blob,{contentType:'image/jpeg',customMetadata:{source:'milky-diary'}});
+    try{
+     await db.collection('photos').doc(id).set({id,uid:auth.currentUser.uid,date,uploaderName,title:photoTitle,path,fileHash,imageHash,createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+    }catch(e){await storage.ref(path).delete().catch(()=>{});throw e}
+    known.push(candidate);uploadedCount++;
+   }catch(e){failed++;photoMsg.textContent=`第 ${i+1} 张上传失败：${e.message}`}
   }
-  localStorage.setItem(NAME_KEY,uploaderName);$('uploadPhoto').value='';photoMsg.textContent='上传成功！照片已经公开，所有访客都可以看到。';
- }catch(e){photoMsg.textContent='上传失败：'+e.message}finally{uploadButton.disabled=false}
+  localStorage.setItem(NAME_KEY,uploaderName);
+  $('uploadPhoto').value='';
+  photoMsg.textContent=`完成：成功上传 ${uploadedCount} 张，跳过重复/取消 ${skipped} 张${failed?'，失败 '+failed+' 张':''}。上传的照片已公开。`;
+ }catch(e){photoMsg.textContent='检查失败：'+e.message}finally{uploadButton.disabled=false}
 };
 $('cloudLogin').onclick=async()=>{
  try{
