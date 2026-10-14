@@ -5,6 +5,8 @@ const $=id=>document.getElementById(id);
 const status=msg=>{$('cloudStatus').textContent=msg};
 const config=window.MILKY_FIREBASE_CONFIG;
 const ownerUids=window.MILKY_OWNER_UIDS || [window.MILKY_OWNER_UID];
+// Keep login entry visible until auth confirms an owner session.
+$('cloudLogin').hidden=false;
 document.body.classList.add('cloud-viewer');
 if(!config || !config.apiKey || config.apiKey.startsWith('PASTE_') || !config.projectId || config.projectId.startsWith('PASTE_')){
  status('尚未连接云端：请按 README 配置 Firebase。当前页面是静态预览，上传功能未启用。');
@@ -17,7 +19,8 @@ try{app=firebase.initializeApp(config);auth=firebase.auth();db=firebase.firestor
 const contentRef=db.collection('site').doc('content');
 const feedingRef=db.collection('site').doc('feeding');
 window.milkyFeedCloud={save:async data=>{if(!isOwner)throw Error('仅主人可以修改喂养记录');await feedingRef.set({data,updatedAt:firebase.firestore.FieldValue.serverTimestamp()})},isOwner:()=>isOwner,authInfo:()=>({uid:auth.currentUser?.uid||null,anonymous:auth.currentUser?.isAnonymous??null,recognized:isOwner})};
-feedingRef.onSnapshot(snap=>{if(snap.exists&&snap.data().data)window.dispatchEvent(new CustomEvent('milky-feeding-cloud',{detail:snap.data().data}));},showError);
+// Attach feeding listener after initialization; failures must not block owner login.
+setTimeout(()=>{try{feedingRef.onSnapshot(snap=>{if(snap.exists&&snap.data().data)window.dispatchEvent(new CustomEvent('milky-feeding-cloud',{detail:snap.data().data}));},e=>console.warn('Feeding sync:',e));}catch(e){console.warn('Feeding listener:',e)}},0);
 
 let isOwner=false, signedIn=false, cloudReady=false, saving=false, cloudPhotoDocs=[];
 let loginPending=false, authTransition=false, anonymousPending=false;
