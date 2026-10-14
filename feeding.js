@@ -26,7 +26,7 @@ function automaticEstimate(){
  // Broad, non-prescriptive growth-stage reference factors, not a veterinary feeding prescription.
  const low=ageMonths<4?2.5:ageMonths<12?2:1.2;
  const high=ageMonths<4?3:ageMonths<12?2.5:1.6;
- return {kg,ageMonths,lowKcal:rer*low,highKcal:rer*high,target:rer*(low+high)/2};
+ return {kg,ageMonths,lowKcal:rer*low,highKcal:rer*high,target:rer*(ageMonths<12?2.2:1.4)};
 }
 function describeQuantity(grams,food){
  if(!food||!Number.isFinite(grams))return '—';
