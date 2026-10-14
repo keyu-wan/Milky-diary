@@ -1,5 +1,5 @@
 // Milky Diary PWA — cache only the HTML shell; never cache Firebase/API/photo data.
-const CACHE = 'milky-shell-v7';
+const CACHE = 'milky-shell-v9-owner-auth-diagnostic';
 const SHELL = new URL('./index.html', self.registration.scope).href;
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.add(SHELL)).catch(() => {}));

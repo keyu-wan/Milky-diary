@@ -54,13 +54,13 @@ function render(){
 }
 $('feedFoodSelect').addEventListener('change',render);
 $('feedAddFood').onclick=async()=>{
- if(!owner())return message('请先以主人账号登录。');
+ if(!owner()){const info=window.milkyFeedCloud?.authInfo?.();return message(info?.uid?'当前登录账号未获得主人权限（UID: '+info.uid+'）。请检查主人 UID 与网页版本。':'登录状态尚未同步，请等待页面顶部显示「主人已登录」后重试；若一直未出现，请刷新页面。');}
  const name=$('feedFoodName').value.trim(),v=Number($('feedFoodKcal').value),type=$('feedFoodType').value,canGrams=Number($('feedCanGrams').value);
  if(!name||name.length>70||!Number.isFinite(v)||v<=0||v>10000)return message('请输入食物名称和包装上的 kcal/kg（必须大于 0）。');
  if(type==='wet'&&(!Number.isFinite(canGrams)||canGrams<=0||canGrams>2000))return message('罐头请填写每罐净含量（克）。');data.foods.push({id:crypto.randomUUID?.()||'f'+Date.now(),name,type,kcalPerKg:v,canGrams:type==='wet'?canGrams:null});$('feedFoodName').value='';$('feedFoodKcal').value='';$('feedCanGrams').value='';render();await persist();
 };
 $('feedAddMeal').onclick=async()=>{
- if(!owner())return message('请先以主人账号登录。');
+ if(!owner()){const info=window.milkyFeedCloud?.authInfo?.();return message(info?.uid?'当前登录账号未获得主人权限（UID: '+info.uid+'）。请检查主人 UID 与网页版本。':'登录状态尚未同步，请等待页面顶部显示「主人已登录」后重试；若一直未出现，请刷新页面。');}
  const food=data.foods.find(f=>f.id===$('feedFoodSelect').value),grams=Number($('feedGrams').value);
  if(!food||!Number.isFinite(grams)||grams<=0||grams>1000)return message('请选择食物并输入实际吃下的克数。');
  const d=new Date();data.meals.push({id:crypto.randomUUID?.()||'m'+Date.now(),date:day(),time:d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}),foodId:food.id,name:food.name,grams,kcal:kcal(food,grams),foodType:food.type,canGrams:food.canGrams||null});

@@ -15,11 +15,15 @@ if(typeof firebase==='undefined'){status('Firebase 脚本加载失败，请检�
 let app,auth,db,storage;
 try{app=firebase.initializeApp(config);auth=firebase.auth();db=firebase.firestore();storage=firebase.storage()}catch(e){status('Firebase 初始化失败：'+e.message);return}
 const contentRef=db.collection('site').doc('content');
+const feedingRef=db.collection('site').doc('feeding');
+window.milkyFeedCloud={save:async data=>{if(!isOwner)throw Error('仅主人可以修改喂养记录');await feedingRef.set({data,updatedAt:firebase.firestore.FieldValue.serverTimestamp()})},isOwner:()=>isOwner,authInfo:()=>({uid:auth.currentUser?.uid||null,anonymous:auth.currentUser?.isAnonymous??null,recognized:isOwner})};
+feedingRef.onSnapshot(snap=>{if(snap.exists&&snap.data().data)window.dispatchEvent(new CustomEvent('milky-feeding-cloud',{detail:snap.data().data}));},showError);
+
 let isOwner=false, signedIn=false, cloudReady=false, saving=false, cloudPhotoDocs=[];
 let loginPending=false, authTransition=false, anonymousPending=false;
 const photoRefs=new Map();
 const setOwner=flag=>{
- isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);
+ isOwner=flag;document.body.classList.toggle('cloud-viewer',!flag);window.dispatchEvent(new Event('milky-feeding-auth'));
  $('cloudLogin').hidden=flag;$('cloudLogout').hidden=!flag;
  $('cloudSeed').hidden=!flag || cloudReady;
  document.querySelectorAll('.taskRow input[type=checkbox]').forEach(el=>el.disabled=!flag);document.querySelectorAll('.taskStar').forEach(el=>el.disabled=!flag);
