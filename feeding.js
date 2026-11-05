@@ -1,6 +1,13 @@
 /* Milky Feeding: measured calories, owner-only cloud edits. No AI-generated medical prescriptions. */
 (()=>{'use strict';
-const $=id=>document.getElementById(id), KEY='milky_feeding_v1';
+const $=id=>document.getElementById(id), KEY='milky_feeding_v1', SETTINGS_KEY='milky_feeding_review_settings_v1';
+const defaultSettings=()=>({factor:2.2,neuterDate:'2026-11-05',lastReviewed:null});
+let settings=defaultSettings();
+try{const stored=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'null');if(stored&&typeof stored==='object')settings={...settings,...stored}}catch{}
+const localDate=d=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+const parseDay=s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s))?new Date(s+'T12:00:00'):null;
+const daysSince=s=>{const d=parseDay(s);return d?Math.floor((new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12)-d)/86400000):null};
+const saveSettings=()=>{try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings));return true}catch{return false}};
 const blank=()=>({foods:[],meals:[],target:null});
 let data=blank(), cloudSeen=false, pending=false;
 try{const saved=JSON.parse(localStorage.getItem(KEY)||'null');if(saved&&Array.isArray(saved.foods)&&Array.isArray(saved.meals))data=saved;}catch{}
@@ -26,12 +33,35 @@ function automaticEstimate(){
  // Broad, non-prescriptive growth-stage reference factors, not a veterinary feeding prescription.
  const low=ageMonths<4?2.5:ageMonths<12?2:1.2;
  const high=ageMonths<4?3:ageMonths<12?2.5:1.6;
- return {kg,ageMonths,lowKcal:rer*low,highKcal:rer*high,target:rer*(ageMonths<12?2.2:1.4)};
+ return {kg,ageMonths,lowKcal:rer*low,highKcal:rer*high,target:rer*(ageMonths<12?Number(settings.factor):1.4)};
 }
 function describeQuantity(grams,food){
  if(!food||!Number.isFinite(grams))return '—';
  if(food.type==='wet'&&num(food.canGrams)>0)return `${fmt(grams/num(food.canGrams))} 罐（${fmt(grams)} g）`;
  return `${fmt(grams)} g${food.type==='wet'?' 罐头':''}`;
+}
+function renderReview(estimate){
+ const box=$('feedReview'),done=$('feedReviewDone'),status=$('feedReviewStatus');if(!box)return;
+ const neuterAge=daysSince(settings.neuterDate),reviewAge=daysSince(settings.lastReviewed);
+ const weights=(typeof milkyWeights!=='undefined'&&Array.isArray(milkyWeights))?milkyWeights.filter(w=>Number(w.kg)>0&&parseDay(w.date)).sort((a,b)=>b.date.localeCompare(a.date)):[];
+ const latest=weights[0],weightAge=latest?daysSince(latest.date):null;
+ const nextPostOp=neuterAge===null?null:neuterAge<7?7:neuterAge<14?14:neuterAge<28?28:null;
+ const postOpDue=nextPostOp!==null&&neuterAge>=nextPostOp;
+ const reviewDue=reviewAge===null||reviewAge>=28;
+ const reminders=[];
+ if(neuterAge!==null&&neuterAge>=0&&neuterAge<7)reminders.push(`术后第 ${neuterAge+1} 天：优先遵守医院术后喂食说明，恢复期不要强制补足计算器目标。`);
+ if(neuterAge!==null&&neuterAge>=7&&neuterAge<14)reminders.push('术后约一周：检查食欲、精神和伤口恢复，按医院要求复查。');
+ if(neuterAge!==null&&neuterAge>=14&&neuterAge<28)reminders.push('术后两周：结合最新体重、肋骨触感和腰身评估喂养量。');
+ if(neuterAge!==null&&neuterAge>=28)reminders.push('绝育已满四周：复查体况及生长趋势，必要时调整系数。');
+ if(weightAge===null)reminders.push('尚无有效体重记录，请先记录体重。');
+ else if(weightAge>=7)reminders.push(`最近一次体重记录距今 ${weightAge} 天：建议重新称重。`);
+ if(weights.length>=2){const previous=weights.find(w=>w!==latest&&w.date!==latest.date);if(previous){const diff=(Number(latest.kg)-Number(previous.kg))*1000;reminders.push(`最近两次不同日期称重：${diff>=0?'+':''}${Math.round(diff)} g。幼猫正常长大也会增重，不能仅凭增重判断肥胖。`)}}
+ if(reviewDue)reminders.push('喂养评估待完成：检查体况评分（理想通常为 4–5/9）、体重趋势和实际进食量。');
+ if(!reminders.length)reminders.push('目前没有到期提醒。继续每周称重，约每四周重新评估喂养量。');
+ box.textContent=reminders.join('\n');box.style.whiteSpace='pre-line';
+ done.disabled=!owner();done.title=owner()?'记录本次评估完成日期':'仅主人可操作';
+ status.textContent=settings.lastReviewed?'上次完成评估：'+settings.lastReviewed:'尚未标记完成评估';
+ $('feedFactor').value=String(settings.factor);$('feedNeuterDate').value=settings.neuterDate||'';
 }
 function render(){
  const today=day(), meals=data.meals.filter(m=>m.date===today), eaten=meals.reduce((a,m)=>a+num(m.kcal),0),estimate=automaticEstimate(),target=estimate?.target||0;
@@ -48,10 +78,25 @@ function render(){
  $('feedAdviceKcal').textContent=estimate?`已摄入 ${fmt(eaten)} kcal · 参考目标 ${Math.round(target)} kcal · 剩余 ${fmt(remaining)} kcal`:`已摄入 ${fmt(eaten)} kcal`;
  $('feedFoods').innerHTML=data.foods.length?data.foods.map(f=>`<div class="feed-item"><span>${clean(f.name)} <span class="feed-mini">${fmt(f.kcalPerKg)} kcal/kg · ${clean(f.type==='wet'?'罐头/湿粮':f.type==='dry'?'干粮':'其他')}${f.type==='wet'&&num(f.canGrams)>0?' · '+fmt(f.canGrams)+' g/罐':''}</span></span><button type="button" class="feed-btn" data-food-delete="${clean(f.id)}">删除</button></div>`).join(''):'<p class="feed-muted">还没有添加食物，请从包装填写真实热量。</p>';
  $('feedMeals').innerHTML=meals.length?meals.slice().reverse().map(m=>`<div class="feed-item"><span>${clean(m.name)} · ${describeQuantity(num(m.grams),data.foods.find(f=>f.id===m.foodId)||{type:m.foodType,canGrams:m.canGrams})} <span class="feed-mini">(${fmt(m.kcal)} kcal)</span> <span class="feed-mini">${clean(m.time||'')}</span></span><button type="button" class="feed-btn" data-meal-delete="${clean(m.id)}">删除</button></div>`).join(''):'<p class="feed-muted">今天还没有进食记录。</p>';
- $('feedEstimateText').textContent=estimate?`当前体重 ${estimate.kg} kg · 约 ${estimate.ageMonths.toFixed(1)} 月龄。`:'请先在左侧「体重成长」添加最新体重，系统将自动计算生长期参考范围。';
+ renderReview(estimate);
+ $('feedEstimateText').textContent=estimate?`当前体重 ${estimate.kg} kg · 约 ${estimate.ageMonths.toFixed(1)} 月龄 · 当前系数 ${estimate.ageMonths<12?settings.factor:'成年阶段 1.4'} × RER。`:'请先在左侧「体重成长」添加最新体重，系统将自动计算生长期参考范围。';
  document.querySelectorAll('[data-food-delete]').forEach(b=>b.onclick=async()=>{if(!owner())return;data.foods=data.foods.filter(f=>f.id!==b.dataset.foodDelete);render();await persist()});
  document.querySelectorAll('[data-meal-delete]').forEach(b=>b.onclick=async()=>{if(!owner())return;data.meals=data.meals.filter(m=>m.id!==b.dataset.mealDelete);render();await persist()});
 }
+$('feedSaveSettings').onclick=()=>{
+ if(!owner())return message('请先登录主人账号，再修改喂养设置。');
+ const factor=Number($('feedFactor').value),date=$('feedNeuterDate').value;
+ if(!Number.isFinite(factor)||factor<1||factor>4)return message('请输入 1.0–4.0 之间的系数。');
+ if(date&&!parseDay(date))return message('请输入有效的绝育日期。');
+ settings.factor=factor;settings.neuterDate=date;
+ if(!saveSettings())return message('当前设备无法保存喂养设置。');
+ render();message('喂养设置已保存到当前设备（不会修改云端食物记录）。');
+};
+$('feedReviewDone').onclick=()=>{
+ if(!owner())return message('请先登录主人账号。');
+ settings.lastReviewed=day();if(!saveSettings())return message('当前设备无法保存评估日期。');
+ render();message('已记录本次评估完成。');
+};
 $('feedFoodSelect').addEventListener('change',render);
 $('feedAddFood').onclick=async()=>{
  if(!owner()){const info=window.milkyFeedCloud?.authInfo?.();return message(info?.uid?'当前登录账号未获得主人权限（UID: '+info.uid+'）。请检查主人 UID 与网页版本。':'登录状态尚未同步，请等待页面顶部显示「主人已登录」后重试；若一直未出现，请刷新页面。');}
