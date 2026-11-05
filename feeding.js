@@ -1,7 +1,8 @@
 /* Milky Feeding: measured calories, owner-only cloud edits. No AI-generated medical prescriptions. */
 (()=>{'use strict';
 const $=id=>document.getElementById(id), KEY='milky_feeding_v1', SETTINGS_KEY='milky_feeding_review_settings_v1';
-const defaultSettings=()=>({factor:2.2,neuterDate:'2026-11-05',lastReviewed:null});
+const NEUTER_DATE='2026-11-05';
+const defaultSettings=()=>({factor:2.2,lastReviewed:null});
 let settings=defaultSettings();
 try{const stored=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'null');if(stored&&typeof stored==='object')settings={...settings,...stored}}catch{}
 const localDate=d=>[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
@@ -10,6 +11,7 @@ const daysSince=s=>{const d=parseDay(s);return d?Math.floor((new Date(new Date()
 const saveSettings=()=>{try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings));return true}catch{return false}};
 const blank=()=>({foods:[],meals:[],target:null});
 let data=blank(), cloudSeen=false, pending=false;
+window.milkyFeedingFoods=()=>data.foods.slice();
 try{const saved=JSON.parse(localStorage.getItem(KEY)||'null');if(saved&&Array.isArray(saved.foods)&&Array.isArray(saved.meals))data=saved;}catch{}
 const owner=()=>!!window.milkyFeedCloud?.isOwner?.();
 const day=()=>{const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')};
@@ -42,7 +44,7 @@ function describeQuantity(grams,food){
 }
 function renderReview(estimate){
  const box=$('feedReview'),done=$('feedReviewDone'),status=$('feedReviewStatus');if(!box)return;
- const neuterAge=daysSince(settings.neuterDate),reviewAge=daysSince(settings.lastReviewed);
+ const neuterAge=daysSince(NEUTER_DATE),reviewAge=daysSince(settings.lastReviewed);
  const weights=(typeof milkyWeights!=='undefined'&&Array.isArray(milkyWeights))?milkyWeights.filter(w=>Number(w.kg)>0&&parseDay(w.date)).sort((a,b)=>b.date.localeCompare(a.date)):[];
  const latest=weights[0],weightAge=latest?daysSince(latest.date):null;
  const nextPostOp=neuterAge===null?null:neuterAge<7?7:neuterAge<14?14:neuterAge<28?28:null;
@@ -61,7 +63,7 @@ function renderReview(estimate){
  box.textContent=reminders.join('\n');box.style.whiteSpace='pre-line';
  done.disabled=!owner();done.title=owner()?'记录本次评估完成日期':'仅主人可操作';
  status.textContent=settings.lastReviewed?'上次完成评估：'+settings.lastReviewed:'尚未标记完成评估';
- $('feedFactor').value=String(settings.factor);$('feedNeuterDate').value=settings.neuterDate||'';
+ $('feedFactor').value=String(settings.factor);
 }
 function render(){
  const today=day(), meals=data.meals.filter(m=>m.date===today), eaten=meals.reduce((a,m)=>a+num(m.kcal),0),estimate=automaticEstimate(),target=estimate?.target||0;
@@ -85,10 +87,9 @@ function render(){
 }
 $('feedSaveSettings').onclick=()=>{
  if(!owner())return message('请先登录主人账号，再修改喂养设置。');
- const factor=Number($('feedFactor').value),date=$('feedNeuterDate').value;
+ const factor=Number($('feedFactor').value);
  if(!Number.isFinite(factor)||factor<1||factor>4)return message('请输入 1.0–4.0 之间的系数。');
- if(date&&!parseDay(date))return message('请输入有效的绝育日期。');
- settings.factor=factor;settings.neuterDate=date;
+ settings.factor=factor;
  if(!saveSettings())return message('当前设备无法保存喂养设置。');
  render();message('喂养设置已保存到当前设备（不会修改云端食物记录）。');
 };
@@ -102,7 +103,7 @@ $('feedAddFood').onclick=async()=>{
  if(!owner()){const info=window.milkyFeedCloud?.authInfo?.();return message(info?.uid?'当前登录账号未获得主人权限（UID: '+info.uid+'）。请检查主人 UID 与网页版本。':'登录状态尚未同步，请等待页面顶部显示「主人已登录」后重试；若一直未出现，请刷新页面。');}
  const name=$('feedFoodName').value.trim(),v=Number($('feedFoodKcal').value),type=$('feedFoodType').value,canGrams=Number($('feedCanGrams').value);
  if(!name||name.length>70||!Number.isFinite(v)||v<=0||v>10000)return message('请输入食物名称和包装上的 kcal/kg（必须大于 0）。');
- if(type==='wet'&&(!Number.isFinite(canGrams)||canGrams<=0||canGrams>2000))return message('罐头请填写每罐净含量（克）。');data.foods.push({id:crypto.randomUUID?.()||'f'+Date.now(),name,type,kcalPerKg:v,canGrams:type==='wet'?canGrams:null});$('feedFoodName').value='';$('feedFoodKcal').value='';$('feedCanGrams').value='';render();await persist();
+ if(type==='wet'&&(!Number.isFinite(canGrams)||canGrams<=0||canGrams>2000))return message('罐头请填写每罐净含量（克）。');data.foods.push({id:crypto.randomUUID?.()||'f'+Date.now(),name,type,kcalPerKg:v,canGrams:type==='wet'?canGrams:null});$('feedFoodName').value='';$('feedFoodKcal').value='';$('feedCanGrams').value='';render();window.milkyI18n?.refresh();await persist();
 };
 $('feedAddMeal').onclick=async()=>{
  if(!owner()){const info=window.milkyFeedCloud?.authInfo?.();return message(info?.uid?'当前登录账号未获得主人权限（UID: '+info.uid+'）。请检查主人 UID 与网页版本。':'登录状态尚未同步，请等待页面顶部显示「主人已登录」后重试；若一直未出现，请刷新页面。');}
@@ -111,7 +112,7 @@ $('feedAddMeal').onclick=async()=>{
  const d=new Date();data.meals.push({id:crypto.randomUUID?.()||'m'+Date.now(),date:day(),time:d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}),foodId:food.id,name:food.name,grams,kcal:kcal(food,grams),foodType:food.type,canGrams:food.canGrams||null});
  $('feedGrams').value='';render();await persist();
 };
-window.addEventListener('milky-feeding-cloud',e=>{const remote=e.detail;if(remote&&Array.isArray(remote.foods)&&Array.isArray(remote.meals)&&!pending){data=remote;cloudSeen=true;try{localStorage.setItem(KEY,JSON.stringify(data))}catch{}render()}});
+window.addEventListener('milky-feeding-cloud',e=>{const remote=e.detail;if(remote&&Array.isArray(remote.foods)&&Array.isArray(remote.meals)&&!pending){data=remote;cloudSeen=true;try{localStorage.setItem(KEY,JSON.stringify(data))}catch{}render();window.milkyI18n?.refresh()}});
 window.addEventListener('milky-feeding-auth',()=>{render()});
 let weightSignature='';setInterval(()=>{const x=(typeof milkyWeights!=='undefined'&&Array.isArray(milkyWeights))?JSON.stringify(milkyWeights):'';if(x!==weightSignature){weightSignature=x;render()}},2500);
 render();
